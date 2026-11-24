@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate listing
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The Cline MCP Marketplace asks for a 400x400 PNG logo.
+      - name: Check the logo
+        shell: python3 {0}
+        run: |
+          import pathlib, struct, sys
+
+          logo = pathlib.Path("logo.png")
+          if not logo.exists():
+              print("::notice::No logo.png yet, so there is nothing to check.")
+              sys.exit(0)
+          head = logo.read_bytes()[:24]
+          if head[:8] != b"\x89PNG\r\n\x1a\n" or head[12:16] != b"IHDR":
+              print("::error::logo.png is not a PNG.")
+              sys.exit(1)
+          width, height = struct.unpack(">II", head[16:24])
+          if (width, height) != (400, 400):
+              print(f"::error::logo.png is {width}x{height}. The marketplace asks for 400x400.")
+              sys.exit(1)
+
+  # Aggregating job the org rulesets require as the `ci` status check on main.
+  ci:
+    if: always()
+    needs: [validate]
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "Job results: ${{ toJSON(needs.*.result) }}"
+          if [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}" == "true" ]]; then
+            exit 1
+          fi
